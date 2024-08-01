@@ -8,95 +8,96 @@ module car_rental::Services {
     use sui::sui::SUI;
 
     // Constants for the rental contract
-    const ENotOwner: u64 = 1; // Error code for not being the owner
-    const EInvalidWithdrawalAmount: u64 = 2; // Error code for invalid withdrawal amount
-    const ECarExpired: u64 = 3; // Error code for car expired
-    const ECarNotExpired: u64 = 4; // Error code for car not expired
-    const EInvalidCarId: u64 = 5; // Error code for invalid car ID
-    const EInvalidPrice: u64 = 6; // Error code for invalid price
-    const EInsufficientPayment: u64 = 7; // Error code for insufficient payment
-    const ECarIsNotListed: u64 = 8; // Error code for car not listed
+    const ENotOwner: u64 = 1;
+    const EInvalidWithdrawalAmount: u64 = 2;
+    const ECarExpired: u64 = 3;
+    const ECarNotExpired: u64 = 4;
+    const EInvalidCarId: u64 = 5;
+    const EInvalidPrice: u64 = 6;
+    const EInsufficientPayment: u64 = 7;
+    const ECarIsNotListed: u64 = 8;
     const DEPOSIT: u64 = 5000000000; // Deposit required for renting a car (500 SUI)
 
     // Struct representing the rental service
     public struct CarRental has key {
-        id: UID, // Unique ID for the rental service
-        owner_cap: ID, // Owner capability ID
-        balance: Balance<SUI>, // Balance of the rental service
-        deposit: Balance<SUI>, // Deposit balance for rented cars
-        cars: Table<u64, ListedCar>, // Table of listed cars
-        car_count: u64, // Count of listed cars
-        car_added_count: u64, // Total count of cars added
+        id: UID,
+        owner_cap: ID,
+        balance: Balance<SUI>,
+        deposit: Balance<SUI>,
+        cars: Table<u64, ListedCar>,
+        car_count: u64,
+        car_added_count: u64,
     }
 
     // Struct representing the capability of the car owner
     public struct CarOwnerCapability has key {
-        id: UID, // Unique ID for the owner capability
-        rental: ID, // Associated rental ID
+        id: UID,
+        rental: ID,
     }
 
     // Struct representing a car being rented
     public struct Car has key {
-        id: UID, // Unique ID for the car
-        car_index: u64, // Index of the car in the rental service
-        title: String, // Title of the car
-        description: String, // Description of the car
-        price: u64, // Price per day for renting the car
-        expiry: u64, // Expiry timestamp for the rental period
-        category: u8, // Category of the car
-        renter: address, // Address of the renter
+        id: UID,
+        car_index: u64,
+        title: String,
+        description: String,
+        price: u64,
+        expiry: u64,
+        category: u8,
+        renter: address,
+        rating: u8, // New field to store the car rating
     }
 
     // Struct representing a listed car
     public struct ListedCar has store, drop {
-        index: u64, // Index of the car
-        title: String, // Title of the car
-        description: String, // Description of the car
-        price: u64, // Price per day for renting the car
-        listed: bool, // Whether the car is listed for rent
-        category: u8, // Category of the car
+        index: u64,
+        title: String,
+        description: String,
+        price: u64,
+        listed: bool,
+        category: u8,
     }
 
     // Event struct when a car is added
     public struct CarAdded has copy, drop {
-        rental_id: ID, // ID of the rental service
-        car_index: u64, // Index of the added car
+        rental_id: ID,
+        car_index: u64,
     }
 
     // Event struct when a car is rented
     public struct CarRented has copy, drop {
-        rental_id: ID, // ID of the rental service
-        car_index: u64, // Index of the rented car
-        days: u64, // Number of days the car is rented for
-        renter: address, // Address of the renter
+        rental_id: ID,
+        car_index: u64,
+        days: u64,
+        renter: address,
     }
 
     // Event struct when a car is returned
     public struct CarReturned has copy, drop {
-        rental_id: ID, // ID of the rental service
-        car_index: u64, // Index of the returned car
-        return_timestamp: u64, // Timestamp when the car is returned
-        renter: address, // Address of the renter
+        rental_id: ID,
+        car_index: u64,
+        return_timestamp: u64,
+        renter: address,
     }
 
     // Event struct when a car is expired
     public struct CarExpired has copy, drop {
-        rental_id: ID, // ID of the rental service
-        car_index: u64, // Index of the expired car
-        renter: address, // Address of the renter
+        rental_id: ID,
+        car_index: u64,
+        renter: address,
     }
 
     // Event struct when a car is unlisted
     public struct CarUnlisted has copy, drop {
-        rental_id: ID, // ID of the rental service
-        car_index: u64, // Index of the unlisted car
+        rental_id: ID,
+        car_index: u64,
     }
 
     // Event struct when a withdrawal is made
     public struct RentalWithdrawal has copy, drop {
-        rental_id: ID, // ID of the rental service
-        amount: u64, // Amount withdrawn
-        recipient: address, // Address of the recipient
+        rental_id: ID,
+        amount: u64,
+        recipient: address,
     }
 
     // Function to create a new rental service
@@ -198,6 +199,7 @@ module car_rental::Services {
             expiry: clock::timestamp_ms(clock) + days * 86400000,
             category: car.category,
             renter: recipient,
+            rating: 0, // Initialize rating to 0
         };
         transfer::transfer(rented_car, recipient);
         car.listed = false;
@@ -274,6 +276,37 @@ module car_rental::Services {
         });
     }
 
+    // Function to extend the rental period of a car
+    public fun extend_rental(
+        car: &mut Car,
+        extra_days: u64,
+        payment_coin: coin::Coin<SUI>,
+        clock: &Clock,
+        ctx: &mut TxContext
+    ) {
+        let additional_cost = car.price * extra_days;
+        assert_correct_payment(coin::value(&payment_coin), additional_cost);
+        let mut coin_balance = coin::into_balance(payment_coin);
+        balance::join(&mut car_rental.balance, coin_balance);
+        car.expiry = car.expiry + extra_days * 86400000;
+        let rental_id = sui::object::uid_to_inner(&car_rental.id);
+        event::emit(CarRented {
+            rental_id,
+            car_index: car.car_index,
+            days: extra_days,
+            renter: car.renter,
+        });
+    }
+
+    // Function to rate a car
+    public fun rate_car(
+        car: &mut Car,
+        rating: u8,
+    ) {
+        assert!(rating >= 1 && rating <= 5, 9); // Ensuring rating is between 1 and 5
+        car.rating = rating;
+    }
+
     // Function to burn a car object
     public entry fun burn(nft: Car, _: &mut TxContext) {
         let Car {
@@ -285,6 +318,7 @@ module car_rental::Services {
             expiry: _,
             category: _,
             renter: _,
+            rating: _,
         } = nft;
         object::delete(id);
     }
